@@ -96,26 +96,21 @@ class SheetsClient:
         full_format: str = "",
         severity: str = "ERROR",
     ) -> None:
-        """Ghi F, G, H + full format E + highlight màu toàn dòng — 1 batch call."""
-        updates = []
-
-        # Always write full_format to column E
-        updates.append({
-            "range": f"{rowcol_to_a1(row, _COL_FULL_FMT)}",
-            "values": [[full_format]],
-        })
-        updates.append({
-            "range": f"{rowcol_to_a1(row, _COL_OFFER1)}",
-            "values": [[offer1 or ""]],
-        })
-        updates.append({
-            "range": f"{rowcol_to_a1(row, _COL_OFFER2)}",
-            "values": [[offer2 or ""]],
-        })
-        updates.append({
-            "range": f"{rowcol_to_a1(row, _COL_RESULT)}",
-            "values": [[result]],
-        })
+        """Ghi F, G, H + highlight màu toàn dòng A–H — 1 batch call."""
+        updates = [
+            {
+                "range": f"{rowcol_to_a1(row, _COL_OFFER1)}",
+                "values": [[offer1 or ""]],
+            },
+            {
+                "range": f"{rowcol_to_a1(row, _COL_OFFER2)}",
+                "values": [[offer2 or ""]],
+            },
+            {
+                "range": f"{rowcol_to_a1(row, _COL_RESULT)}",
+                "values": [[result]],
+            },
+        ]
 
         self._ws.batch_update(updates)
 

@@ -237,6 +237,50 @@ async def get_pads():
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+def _extract_token(data) -> Optional[str]:
+    """Trích token từ response stsTokenByPadCode (data có thể là str hoặc dict)."""
+    if isinstance(data, str):
+        return data
+    if isinstance(data, dict):
+        for key in ("token", "stsToken", "access", "accessToken"):
+            v = data.get(key)
+            if isinstance(v, str) and v:
+                return v
+    return None
+
+
+@app.get("/api/pads/{pad_code}/h5-token")
+async def get_h5_token(pad_code: str):
+    """Lấy token tạm cho Armcloud H5 SDK theo padCode (view-only live stream).
+
+    Backend dùng access_key/secret_key gọi VMOS stsTokenByPadCode,
+    không expose secret key ra client.
+    """
+    if not _settings.access_key or not _settings.secret_key:
+        return JSONResponse({"error": "VMOS API chưa cấu hình"}, status_code=400)
+
+    try:
+        from vmos_sdk import VmosClient
+        client = VmosClient(access_key=_settings.access_key,
+                            secret_key=_settings.secret_key)
+        r = await asyncio.to_thread(client.sdk_token.get_token_by_padcode, pad_code)
+        client.close()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    token = _extract_token(r.data)
+    if not token:
+        return JSONResponse(
+            {"error": "Không lấy được token", "raw": r.data}, status_code=502
+        )
+
+    return {
+        "token": token,
+        "baseUrl": _settings.h5_base_url,
+        "padCode": pad_code,
+    }
+
+
 # ── Runner API ────────────────────────────────────────────────────────────────
 
 class RunPayload(BaseModel):

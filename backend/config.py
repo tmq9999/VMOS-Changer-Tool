@@ -35,6 +35,11 @@ class Settings(BaseModel):
     # Queue behaviour
     skip_successful: bool = True     # skip dòng đã SUCCESS
 
+    # Viewer (H5 SDK live view)
+    viewer_rows: int = 1             # số dòng grid mặc định
+    viewer_cols: int = 4             # số cột grid mặc định
+    h5_base_url: str = "https://openapi-hk.armcloud.net"  # baseUrl cho Armcloud H5 SDK
+
 
 def load_settings() -> Settings:
     if os.path.exists(_SETTINGS_PATH):
