@@ -1,0 +1,34 @@
+# ── Secrets / config (KHÔNG push — chứa API key, private key) ──
+settings.json
+
+# ── Data / DB runtime ──
+data/jobs.db
+data/*.db
+
+# ── Test / debug scaffolding tạm ──
+_test_*.py
+_diag_*.py
+_flow_log.txt
+
+# ── Node / frontend ──
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+*.log
+npm-debug.log*
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# ── OS / IDE ──
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

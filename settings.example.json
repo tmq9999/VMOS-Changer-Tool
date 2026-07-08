@@ -1,0 +1,18 @@
+{
+  "access_key": "",
+  "secret_key": "",
+  "pad_mode": "manual",
+  "manual_pad_codes": [],
+  "service_account_json": "",
+  "spreadsheet_id": "",
+  "sheet_name": "Sheet1",
+  "data_start_row": 2,
+  "poll_interval": 5.0,
+  "step_timeout": 90.0,
+  "magisk_timeout": 120.0,
+  "retry_count": 3,
+  "worker_start_delay": 2.0,
+  "step_delay": 1.5,
+  "post_boot_settle": 45.0,
+  "skip_successful": true
+}
