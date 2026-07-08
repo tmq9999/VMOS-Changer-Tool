@@ -267,7 +267,43 @@ VMOS-Changer-Tool/
 
 ---
 
-## 🔐 Bảo mật
+## � Deploy lên VPS (Docker Compose)
+
+### Chuẩn bị
+
+- VPS Linux (Ubuntu 24.04 khuyến nghị), 2 vCPU / 2 GB RAM trở lên.
+- Domain trỏ A record về IP VPS.
+- Copy `settings.json` lên VPS (chứa VMOS key, Google Sheet config).
+
+### Build frontend
+
+```bash
+cd webUI_v2_Full
+bun install
+$env:NITRO_PRESET="node-server"  # Windows PowerShell
+# hoặc: NITRO_PRESET=node-server bun run build  # Linux/macOS
+bun run build
+```
+
+### Triển khai
+
+```bash
+# Trên VPS
+cd /opt/vmos-tool
+docker compose up -d --build
+```
+
+Caddy tự động xin HTTPS Let's Encrypt cho domain trong `Caddyfile`. Thay đổi domain trong `Caddyfile` nếu cần.
+
+### Lưu ý
+
+- `webUI_v2_Full/.output` là build output của Nitro, không được commit.
+- `data/jobs.db` được mount volume để persist.
+- `settings.json` phải có quyền `600`.
+
+---
+
+## �🔐 Bảo mật
 
 - **`settings.json` chứa secrets** — đã được `.gitignore` loại khỏi repo. **Không bao giờ commit.**
 - Nếu lỡ commit `settings.json`, rotate lại API key / service account ngay.

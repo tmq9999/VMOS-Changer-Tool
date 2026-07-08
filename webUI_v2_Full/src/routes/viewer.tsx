@@ -42,7 +42,7 @@ function ViewerPage() {
 
   const padsQuery = useQuery({ queryKey: ["pads"], queryFn: getPads });
 
-  const [cols, setCols] = useState(4);
+  const [cols, setCols] = useState(5);
   const [rows, setRows] = useState(2);
 
   const devices = useMemo(() => {
