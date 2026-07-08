@@ -255,10 +255,14 @@ async def get_pads():
     for _attempt in range(4):
         try:
             from vmos_sdk import VmosClient
+            from vmos_sdk.constants import PadStatus, OnlineStatus
             _c = VmosClient(access_key=_settings.access_key,
                             secret_key=_settings.secret_key)
             _r = await asyncio.to_thread(
-                _c.instance.get_list_info, page=1, rows=100
+                _c.instance.get_detail,
+                rows=100,
+                online=OnlineStatus.ONLINE,
+                pad_status=PadStatus.RUNNING,
             )
             _c.close()
             page_data = _r.data.get("pageData", []) if isinstance(_r.data, dict) else []
