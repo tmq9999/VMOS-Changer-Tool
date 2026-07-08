@@ -99,11 +99,11 @@ class SheetsClient:
         """Ghi F, G, H + full format E + highlight màu toàn dòng — 1 batch call."""
         updates = []
 
-        if full_format:
-            updates.append({
-                "range": f"{rowcol_to_a1(row, _COL_FULL_FMT)}",
-                "values": [[full_format]],
-            })
+        # Always write full_format to column E
+        updates.append({
+            "range": f"{rowcol_to_a1(row, _COL_FULL_FMT)}",
+            "values": [[full_format]],
+        })
         updates.append({
             "range": f"{rowcol_to_a1(row, _COL_OFFER1)}",
             "values": [[offer1 or ""]],

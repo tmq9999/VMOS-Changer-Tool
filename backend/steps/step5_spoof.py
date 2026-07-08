@@ -165,7 +165,7 @@ async def run(helper: VmosHelper, cfg: Settings, log) -> None:
 
         # Verify
         if _EXPECTED_MODEL in (out2 or "") and _EXPECTED_DEVICE in (out2 or ""):
-            log(f"Step 5: Spoof thành công ✓\n{out2.strip()}")
+            log("Step 5: Spoof thành công ✓")
             return
 
         log(f"Step 5: Verify thất bại — output: {out2!r}", "WARN")
