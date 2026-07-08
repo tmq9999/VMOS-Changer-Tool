@@ -16,6 +16,10 @@ _ACCOUNT_SETTINGS_ACTION = (
     "-e 'account_types' 'com.google' 2>/dev/null"
 )
 
+# Google sign-in là WebView: ô email KHÔNG có resource-id 'identifierId',
+# mà expose dưới dạng EditText với resource-id rỗng. Phải detect theo class.
+_EDITTEXT_CLASS = "android.widget.EditText"
+
 
 def _generate_totp(secret: str) -> str:
     return pyotp.TOTP(secret).now()
@@ -57,12 +61,14 @@ async def run(helper: VmosHelper, entry: EmailEntry, cfg: Settings, log) -> None
         await asyncio.sleep(settle)
 
     # 2.1-2.3 Mở Add Account → (SKIP nếu cần) → chờ email input.
-    # Robust với retry: ngay sau reboot step1 màn hình có thể chưa sẵn sàng,
-    # click SKIP sớm có thể thoát về Home nên cần re-open + retry.
-    found = await _open_and_reach_email_input(helper, timeout, interval, log)
+    # GMS có thể mất 3-5 phút để sẵn sàng (tắt về Home rồi tự mở lại).
+    # Dùng email_reach_timeout riêng, ít nhất 360s để cover đủ trường hợp.
+    email_reach_timeout = max(timeout, 360.0)
+    found = await _open_and_reach_email_input(helper, email_reach_timeout, interval, log)
     if not found:
         raise RuntimeError("Timeout chờ email input field")
     log(f"Step 2.3: Nhập {entry.email}...")
+    await _tap_email_field(helper)  # focus ô EditText trong WebView trước khi gõ
     await _type_into_field(helper, entry.email)
     await helper.press_enter()
     log("Step 2.3: Nhập email + Enter ✓")
@@ -73,7 +79,7 @@ async def run(helper: VmosHelper, entry: EmailEntry, cfg: Settings, log) -> None
     email_retries = 0
     while True:
         state = await _detect_state(helper, timeout=timeout, interval=interval, checks=[
-            ('password',                       "PASSWORD_FIELD"),
+            ('password="true"',               "PASSWORD_FIELD"),
             ("Couldn't find",                 "EMAIL_NOT_FOUND"),
             ("couldn't find",                 "EMAIL_NOT_FOUND"),
             ('Try again',                     "TRY_AGAIN"),
@@ -96,6 +102,7 @@ async def run(helper: VmosHelper, entry: EmailEntry, cfg: Settings, log) -> None
 
     # Nhập password
     log("Step 2.4: Nhập password...")
+    await _tap_email_field(helper)  # focus ô EditText password trong WebView
     await _type_into_field(helper, entry.password)
     await helper.press_enter()
     await asyncio.sleep(2)
@@ -105,31 +112,19 @@ async def run(helper: VmosHelper, entry: EmailEntry, cfg: Settings, log) -> None
     totp_retries = 0
     skip_totp = False
     while True:
-        state = await _detect_state(helper, timeout=cfg.step_timeout, interval=interval, checks=[
-            ('totpPin',              "TOTP_FIELD"),
-            ('I agree',              "I_AGREE"),
-            ('Wrong password',       "WRONG_PASS"),
-            ('wrong password',       "WRONG_PASS"),
-            ('verification code',    "SMS_OTP"),
-            ('Verify it',            "VERIFY_YOU"),
-            ('More options',         "MORE_OPTIONS"),
-            ('TRY ANOTHER WAY',      "TRY_ANOTHER_WAY"),
-        ])
+        state = await _detect_state_2fa(helper, timeout=cfg.step_timeout, interval=interval)
         if state == "TOTP_FIELD":
             log("Step 2.5: Nhập TOTP...")
             code = _generate_totp(entry.totp_secret)
             log(f"Step 2.5: TOTP code = {code}")
-            # Tap vào field trước khi type
-            xml_t = await helper.grep_xml('totpPin')
-            node_t = _find_node_by_text_or_id(xml_t, 'totpPin')
-            if node_t:
-                coords_t = VmosHelper.extract_bounds(node_t)
-                if coords_t:
-                    await helper.tap(*coords_t)
-                    await asyncio.sleep(0.5)
+            # Tap vào EditText (WebView TOTP field không có totpPin resource-id)
+            coords_t = await helper.get_node_bounds(_EDITTEXT_CLASS)
+            if coords_t:
+                await helper.tap(*coords_t)
+                await asyncio.sleep(0.5)
             await _type_into_field(helper, code)
             await asyncio.sleep(0.5)
-            # Tap NEXT (không dùng Enter)
+            # Tap NEXT
             xml_n = await helper.grep_xml('NEXT')
             node_n = _find_node_by_text(xml_n, 'next')
             if node_n:
@@ -146,30 +141,45 @@ async def run(helper: VmosHelper, entry: EmailEntry, cfg: Settings, log) -> None
             break
         elif state == "WRONG_PASS":
             raise RuntimeError("ERROR: Wrong password")
-        elif state == "SMS_OTP":
-            raise RuntimeError("ERROR: Google yêu cầu SMS/Email OTP — không hỗ trợ")
-        elif state == "TRY_ANOTHER_WAY":
-            log("Step 2.5: 'TRY ANOTHER WAY' — chọn Google Authenticator...", "WARN")
-            # Click TRY ANOTHER WAY
-            xml_t = await helper.grep_xml('TRY ANOTHER WAY')
+        elif state == "CHOOSE_2FA":
+            log("Step 2.5: Màn hình chọn 2FA — click Google Authenticator...", "WARN")
+            xml_a = await helper.grep_xml('Google Authenticator', 'Authenticator app')
+            node_a = (_find_node_by_content_desc(xml_a, 'google authenticator')
+                      or _find_node_containing_text(xml_a, 'google authenticator')
+                      or _find_node_containing_text(xml_a, 'authenticator app'))
+            if node_a:
+                coords_a = VmosHelper.extract_bounds(node_a)
+                if coords_a:
+                    await helper.tap(*coords_a)
+                    await asyncio.sleep(3)
+                    continue
+            raise RuntimeError("ERROR: CHOOSE_2FA — không tìm được Google Authenticator option")
+        elif state == "SECURITY_KEY":
+            log("Step 2.5: Màn hình Security Key (g.co/sc) — click TRY ANOTHER WAY...", "WARN")
+            xml_t = await helper.grep_xml('TRY ANOTHER WAY', 'Try another way')
             node_t = _find_node_by_text(xml_t, 'try another way')
             if node_t:
                 coords_t = VmosHelper.extract_bounds(node_t)
                 if coords_t:
                     await helper.tap(*coords_t)
                     await asyncio.sleep(3)
-            # Chọn Google Authenticator option
-            xml_a = await helper.grep_xml('Google Authenticator')
-            node_a = _find_node_by_content_desc(xml_a, 'google authenticator')
-            if node_a:
-                coords_a = VmosHelper.extract_bounds(node_a)
-                if coords_a:
-                    await helper.tap(*coords_a)
-                    await asyncio.sleep(2)
-            else:
-                raise RuntimeError("ERROR: Không tìm được Google Authenticator option")
+                    continue  # loop lại → detect CHOOSE_2FA → chọn Authenticator
+            raise RuntimeError("ERROR: Security Key screen — không tìm được 'Try another way'")
+        elif state == "SMS_OTP":
+            raise RuntimeError("ERROR: Google yêu cầu SMS OTP (số điện thoại) — không hỗ trợ")
+        elif state == "TRY_ANOTHER_WAY":
+            log("Step 2.5: 'TRY ANOTHER WAY' — click để mở danh sách 2FA...", "WARN")
+            xml_t = await helper.grep_xml('TRY ANOTHER WAY', 'Try another way')
+            node_t = _find_node_by_text(xml_t, 'try another way')
+            if node_t:
+                coords_t = VmosHelper.extract_bounds(node_t)
+                if coords_t:
+                    await helper.tap(*coords_t)
+                    await asyncio.sleep(3)
+                    continue  # loop lại → sẽ detect CHOOSE_2FA
+            raise RuntimeError("ERROR: Không tìm được nút 'Try another way'")
         elif state in ("VERIFY_YOU", "MORE_OPTIONS"):
-            log("Step 2.5: 'Verify it's you' — thử tìm TOTP option...", "WARN")
+            log("Step 2.5: 'Verify it's you' — click More options...", "WARN")
             xml = await helper.grep_xml('More options')
             node = _find_node_by_text(xml, 'more options')
             if node:
@@ -177,10 +187,9 @@ async def run(helper: VmosHelper, entry: EmailEntry, cfg: Settings, log) -> None
                 if coords:
                     await helper.tap(*coords)
                     await asyncio.sleep(2)
-                else:
-                    raise RuntimeError("ERROR: Verify screen — More options không có bounds")
-            else:
-                raise RuntimeError("ERROR: Verify screen — không tìm được TOTP option")
+                    continue  # loop lại → sẽ detect CHOOSE_2FA hoặc TOTP_FIELD
+                raise RuntimeError("ERROR: Verify screen — More options không có bounds")
+            raise RuntimeError("ERROR: Verify screen — không tìm được More options")
         else:
             raise RuntimeError("Timeout chờ state sau password")
 
@@ -255,57 +264,92 @@ async def _current_focus(helper: VmosHelper) -> str:
 
 async def _open_and_reach_email_input(helper: VmosHelper, timeout: float,
                                       interval: float, log) -> bool:
-    """Mở Add Account, click SKIP nếu cần, chờ email input (identifierId).
+    """Mở Add Account, click SKIP nếu cần, chờ email input.
 
-    Retry tối đa 3 lần: re-open ADD_ACCOUNT_SETTINGS nếu bị lạc về Home.
-    Returns True nếu tới được email input.
+    Dùng một time-budget loop duy nhất theo timeout từ caller.
+    Xử lý 3 trường hợp thực tế:
+      (A) Email input (EditText/identifierId) xuất hiện ngay — bỏ qua SKIP.
+      (B) GMS hiện màn SKIP → click → chờ WebView EditText.
+      (C) GMS tắt về Home rồi tự mở lại (mất ~3–4 phút) → re-open nếu cần.
     """
-    for attempt in range(1, 4):
-        log(f"Step 2.1: Mở Add Account Settings (lần {attempt}/3)...")
-        await helper.run_shell(_ACCOUNT_SETTINGS_ACTION)
-        await asyncio.sleep(4)
+    t_start = asyncio.get_event_loop().time()
 
-        # Chờ vào được MinuteMaid (Google sign-in) hoặc thấy sẵn email input
-        reached_signin = False
-        elapsed = 0.0
-        while elapsed < 20:
-            focus = await _current_focus(helper)
-            if 'MinuteMaid' in focus or 'identifierId' in (await helper.grep_xml('identifierId')):
-                reached_signin = True
-                break
-            await asyncio.sleep(interval)
-            elapsed += interval
-        if not reached_signin:
-            log("Step 2.1: Chưa vào MinuteMaid, thử lại...", "WARN")
-            continue
+    def remaining():
+        return timeout - (asyncio.get_event_loop().time() - t_start)
 
-        # Nếu email input đã hiện luôn thì bỏ qua SKIP
-        if 'identifierId' in (await helper.grep_xml('identifierId')):
-            log("Step 2.2: Email input hiện sẵn — bỏ qua SKIP")
+    log("Step 2.1: Mở Add Account Settings...")
+    await helper.run_shell(_ACCOUNT_SETTINGS_ACTION)
+    await asyncio.sleep(4)
+
+    last_reopen = asyncio.get_event_loop().time()
+    skip_clicked = False
+
+    while remaining() > 0:
+        focus = await _current_focus(helper)
+        in_gms = "com.google.android.gms" in focus or "MinuteMaid" in focus
+
+        # Case A: email input đã hiện → done
+        if await _email_input_present(helper):
+            log("Step 2.3: Email input sẵn sàng ✓")
             return True
 
-        # 2.2 Tìm + click SKIP (màn hình 'Sign in with ease')
-        log("Step 2.2: Chờ nút SKIP...")
-        xml = await _grep_poll_for_text(helper, "skip", timeout=20, interval=interval)
-        if xml:
-            node = _find_node_by_text(xml, "skip")
-            coords = VmosHelper.extract_bounds(node) if node else None
-            if coords:
-                log(f"Step 2.2: Click SKIP bounds={coords}")
-                await helper.tap(*coords)
-                await asyncio.sleep(3)
-            else:
-                log("Step 2.2: SKIP không có bounds, bỏ qua", "WARN")
+        if in_gms:
+            # Case B: trong GMS — tìm SKIP nếu chưa click
+            if not skip_clicked:
+                skip_xml = await helper.grep_xml("skip")
+                node = _find_node_by_text(skip_xml or "", "skip")
+                coords = VmosHelper.extract_bounds(node) if node else None
+                if coords:
+                    log(f"Step 2.2: Click SKIP bounds={coords}")
+                    await helper.tap(*coords)
+                    skip_clicked = True
+                    await asyncio.sleep(3)
+                    continue
         else:
-            log("Step 2.2: Không thấy SKIP, tiếp tục", "WARN")
+            # Case C: GMS về Home — re-open sau 5s không thấy GMS
+            since_reopen = asyncio.get_event_loop().time() - last_reopen
+            if since_reopen > 5:
+                log("Step 2.1: GMS tắt — re-open Add Account Settings...", "WARN")
+                await helper.run_shell(_ACCOUNT_SETTINGS_ACTION)
+                await asyncio.sleep(4)
+                last_reopen = asyncio.get_event_loop().time()
+                skip_clicked = False  # có thể cần click SKIP lại
+                continue
 
-        # 2.3 Chờ email input
-        log("Step 2.3: Chờ email input...")
-        if await _poll_xml_contains(helper, 'identifierId', timeout=20, interval=interval):
+        await asyncio.sleep(interval)
+
+    return False
+
+
+async def _email_input_present(helper: VmosHelper) -> bool:
+    """True nếu thấy ô nhập email.
+
+    WebView Google sign-in expose ô email dưới dạng EditText (resource-id rỗng);
+    một số biến thể native có 'identifierId'. Chấp nhận cả hai.
+    """
+    xml = await helper.grep_xml(_EDITTEXT_CLASS, "identifierId")
+    return _EDITTEXT_CLASS in (xml or "") or "identifierId" in (xml or "")
+
+
+async def _wait_email_input(helper: VmosHelper, timeout: float,
+                             interval: float) -> bool:
+    elapsed = 0.0
+    while elapsed < timeout:
+        if await _email_input_present(helper):
             return True
+        await asyncio.sleep(interval)
+        elapsed += interval
+    return False
 
-        # Không thấy email input — có thể click SKIP làm thoát về Home → retry
-        log("Step 2.3: Không thấy email input sau SKIP — re-open Add Account", "WARN")
+
+async def _tap_email_field(helper: VmosHelper) -> bool:
+    """Tap vào ô EditText email để focus trước khi nhập. True nếu tap được."""
+    await helper.grep_xml(_EDITTEXT_CLASS)  # đảm bảo /sdcard/window.xml mới
+    coords = await helper.get_node_bounds(_EDITTEXT_CLASS)
+    if coords:
+        await helper.tap(*coords)
+        await asyncio.sleep(1)
+        return True
     return False
 
 
@@ -350,6 +394,57 @@ async def _detect_state(helper: VmosHelper, checks: list[tuple[str, str]],
     return "TIMEOUT"
 
 
+async def _detect_state_2fa(helper: VmosHelper, timeout: float,
+                             interval: float) -> str:
+    """Poll sau khi nhập password, phân biệt chính xác các màn hình 2FA.
+
+    Màn hình có thể xuất hiện:
+    - TOTP_FIELD    : "Authenticator" + EditText + NEXT — nhập TOTP code
+    - CHOOSE_2FA    : "Choose how" — chọn phương thức 2FA
+    - SECURITY_KEY  : "g.co/sc" hoặc "Get a code to sign in" — không hỗ trợ
+    - TRY_ANOTHER_WAY: nút TRY ANOTHER WAY
+    - I_AGREE       : đăng nhập thành công
+    - WRONG_PASS    : sai mật khẩu
+    - SMS_OTP       : OTP qua số điện thoại
+    - VERIFY_YOU    : "Verify it's you"
+    - MORE_OPTIONS  : "More options"
+    """
+    elapsed = 0.0
+    while elapsed < timeout:
+        xml = await helper.grep_xml(
+            'I agree', 'Wrong password', 'wrong password',
+            'Choose how', 'Verify it', 'More options', 'TRY ANOTHER WAY',
+            'verification code at', 'g.co/sc', 'Get a code to sign in',
+            'Authenticator', 'NEXT', _EDITTEXT_CLASS,
+        )
+        xml = xml or ""
+
+        # Ưu tiên check các màn hình lỗi / unsupported trước
+        if 'I agree'              in xml: return "I_AGREE"
+        if 'Wrong password'       in xml: return "WRONG_PASS"
+        if 'wrong password'       in xml: return "WRONG_PASS"
+        if 'g.co/sc'              in xml: return "SECURITY_KEY"
+        if 'Get a code to sign in' in xml: return "SECURITY_KEY"
+
+        # TOTP_FIELD: PHẢI có "Authenticator" + EditText + NEXT
+        # (phân biệt với Security Key cũng có EditText+NEXT)
+        has_auth     = 'Authenticator' in xml
+        has_edittext = _EDITTEXT_CLASS in xml
+        has_next     = 'NEXT' in xml
+        if has_auth and has_edittext and has_next:
+            return "TOTP_FIELD"
+
+        if 'Choose how'           in xml: return "CHOOSE_2FA"
+        if 'verification code at' in xml: return "SMS_OTP"
+        if 'Verify it'            in xml: return "VERIFY_YOU"
+        if 'More options'         in xml: return "MORE_OPTIONS"
+        if 'TRY ANOTHER WAY'      in xml: return "TRY_ANOTHER_WAY"
+
+        await asyncio.sleep(interval)
+        elapsed += interval
+    return "TIMEOUT"
+
+
 async def _type_into_field(helper: VmosHelper, text: str) -> None:
     """Nhập text an toàn (xử lý ký tự đặc biệt)."""
     # Escape single quotes cho shell
@@ -362,6 +457,24 @@ async def _clear_and_type(helper: VmosHelper, text: str) -> None:
     await helper.run_shell("input keyevent 123")    # KEYCODE_MOVE_END
     await helper.run_shell("input keyevent --longpress 67 67 67 67 67 67 67 67")
     await _type_into_field(helper, text)
+
+
+def _find_node_containing_text(xml: str, substring_lower: str) -> Optional[str]:
+    """Tìm node XML có text CHỨA substring (case-insensitive) và có bounds."""
+    clickable: list[str] = []
+    any_node: list[str] = []
+    for m in re.finditer(r'<node\b[^>]*(?:/>|>)', xml, re.DOTALL):
+        node = m.group(0)
+        tm = re.search(r'\btext="([^"]*)"', node)
+        if not tm or substring_lower not in tm.group(1).lower():
+            continue
+        if 'bounds="' not in node:
+            continue
+        if 'clickable="true"' in node:
+            clickable.append(node)
+        else:
+            any_node.append(node)
+    return (clickable or any_node or [None])[0]
 
 
 def _find_node_by_text(xml: str, text_lower: str) -> Optional[str]:

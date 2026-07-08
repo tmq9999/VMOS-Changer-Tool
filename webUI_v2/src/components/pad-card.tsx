@@ -15,6 +15,7 @@ export function PadCard({ padCode }: { padCode: string }) {
   const viewId = useMemo(() => `pad-video-${padCode}`, [padCode]);
   const engineRef = useRef<{ stop: () => Promise<unknown> | void } | null>(null);
   const retryRef = useRef<number | null>(null);
+  const attemptCountRef = useRef(0);
   const lastFrameTimeRef = useRef<number>(-1);
   const lastProgressAtRef = useRef<number>(Date.now());
   const [status, setStatus] = useState<PadStatus>("connecting");
@@ -81,14 +82,15 @@ export function PadCard({ padCode }: { padCode: string }) {
     let cancelled = false;
     let engine: { stop: () => Promise<unknown> | void; start: () => void } | null = null;
 
-    // Auto-reconnect: the device may be mid-reset/reboot (e.g. while the tool runs),
-    // so keep retrying until it becomes reachable again.
+    // Auto-reconnect with exponential backoff: 5s → 10s → 20s → 30s (cap).
     const scheduleRetry = () => {
       if (cancelled || retryRef.current) return;
+      const delay = Math.min(5000 * Math.pow(2, attemptCountRef.current), 30000);
+      attemptCountRef.current += 1;
       retryRef.current = window.setTimeout(() => {
         retryRef.current = null;
         setAttempt((a) => a + 1);
-      }, 4000);
+      }, delay);
     };
 
     async function boot() {
@@ -129,14 +131,16 @@ export function PadCard({ padCode }: { padCode: string }) {
               } else {
                 setStatus("error");
                 setErrorMsg(msg || `init ${code}`);
+                scheduleRetry();
               }
             },
             onConnectSuccess: () => {
-              if (!cancelled) setStatus("connected");
+              if (!cancelled) { setStatus("connected"); attemptCountRef.current = 0; }
             },
             onRenderedFirstFrame: (event) => {
               if (cancelled) return;
               setStatus("connected");
+              attemptCountRef.current = 0;
               if (event?.width && event?.height) {
                 setStreamAR(event.width / event.height);
               }
@@ -178,8 +182,11 @@ export function PadCard({ padCode }: { padCode: string }) {
       }
     }
 
+    attemptCountRef.current = attempt === 0 ? 0 : attemptCountRef.current;
+
     boot();
 
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     return () => {
       cancelled = true;
       if (retryRef.current) {

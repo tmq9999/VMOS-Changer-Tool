@@ -41,32 +41,34 @@ async def run(helper: VmosHelper, cfg: Settings, log) -> list[str]:
 
     # 6.2 Get screen size và click "Get Started" theo tỷ lệ
     # Google One Welcome dùng Compose UI — uiautomator dump KHÔNG đọc được,
-    # nên tap theo tỷ lệ (0.885) và verify eligibility qua mCurrentFocus.
+    # nên tap theo tỷ lệ và verify eligibility qua mCurrentFocus.
     log("Step 6.2: Lấy screen size và click Get Started...")
     width, height = await helper.get_screen_size()
     x = int(width * 0.5)
-    y = int(height * 0.885)
-    log(f"Step 6.2: Screen {width}x{height} — click ({x}, {y})")
-    await helper.tap(x, y)
-    await asyncio.sleep(3)
+    # Thử lần lượt các tỷ lệ y cho đến khi PartnerOnboarding xuất hiện
+    # Verified: ratio=0.93 → (540,2176) trên 1080x2340 → tap đúng Get Started
+    _y_ratios = [0.93, 0.91, 0.89, 0.87, 0.85]
 
     # 6.3 Verify eligible qua mCurrentFocus == PartnerOnboardingActivity
     log("Step 6.3: Chờ PartnerOnboarding (xác nhận eligible)...")
-    elapsed = 0.0
     found_trial = False
-    while elapsed < timeout:
-        focus = await helper.run_shell(
-            "dumpsys window 2>/dev/null | grep -o 'mCurrentFocus=[^}]*}' | head -1"
-        )
-        if 'PartnerOnboarding' in (focus or ''):
-            found_trial = True
-            log("Step 6.3: PartnerOnboarding — device eligible ✓")
+    for _ratio in _y_ratios:
+        y = int(height * _ratio)
+        log(f"Step 6.2: Screen {width}x{height} — tap ({x}, {y}) ratio={_ratio}")
+        await helper.tap(x, y)
+        # Poll ngắn 15s cho mỗi tỷ lệ
+        for _ in range(5):
+            await asyncio.sleep(3)
+            focus = await helper.run_shell(
+                "dumpsys window 2>/dev/null | grep -o 'mCurrentFocus=[^}]*}' | head -1"
+            )
+            if 'PartnerOnboarding' in (focus or ''):
+                found_trial = True
+                log("Step 6.3: PartnerOnboarding — device eligible ✓")
+                break
+        if found_trial:
             break
-        # Nếu vẫn ở Welcome, thử tap lại Get Started
-        if 'Welcome' in (focus or '') and elapsed > 6:
-            await helper.tap(x, y)
-        await asyncio.sleep(interval)
-        elapsed += interval
+        # Nếu chưa được, tap lại với ratio tiếp theo
 
     if not found_trial:
         raise RuntimeError("WARN: Không vào được PartnerOnboarding — device có thể không eligible")

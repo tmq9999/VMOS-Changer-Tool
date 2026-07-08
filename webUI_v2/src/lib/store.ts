@@ -25,6 +25,8 @@ interface AppState {
   wsStatus: WsStatus;
   workers: Record<string, WorkerState>;
   logs: LogEntry[];
+  selectedPads: string[];
+  setSelectedPads: (pads: string[]) => void;
   lastSheetLoad: {
     at: number;
     result: {
@@ -51,9 +53,11 @@ export const useAppStore = create<AppState>((set) => ({
   wsStatus: "connecting",
   workers: {},
   logs: [],
+  selectedPads: [],
   lastSheetLoad: null,
   setWsStatus: (s) => set({ wsStatus: s }),
   setWorkers: (workers) => set({ workers }),
+  setSelectedPads: (selectedPads) => set({ selectedPads }),
   upsertWorker: (pad, data) =>
     set((state) => ({
       workers: {

@@ -77,9 +77,9 @@ class VmosHelper:
 
     # ── Async wrappers ────────────────────────────────────────────────────────
 
-    async def run_shell(self, script: str, interval: float = 2.0,
-                        max_polls: int = 25, cb_timeout: float = 8.0) -> str:
-        """Chạy shell: dùng callback nếu USE_CALLBACK=True, còn lại polling."""
+    async def _run_shell_once(self, script: str, interval: float,
+                              max_polls: int, cb_timeout: float) -> str:
+        """Thực thi shell một lần (không retry)."""
         if not VmosHelper.USE_CALLBACK:
             return await asyncio.to_thread(
                 self._run_shell_sync, script, interval, max_polls
@@ -96,6 +96,20 @@ class VmosHelper:
             return await asyncio.to_thread(
                 self._poll_task, tid, interval, max_polls
             )
+
+    async def run_shell(self, script: str, interval: float = 2.0,
+                        max_polls: int = 25, cb_timeout: float = 8.0) -> str:
+        """Chạy shell với auto-retry khi gặp VmosInstanceError (110031)."""
+        from vmos_sdk.exceptions import VmosInstanceError
+        for _attempt in range(4):
+            try:
+                return await self._run_shell_once(script, interval, max_polls, cb_timeout)
+            except VmosInstanceError:
+                if _attempt >= 3:
+                    raise
+                wait = 10 * (2 ** _attempt)  # 10s, 20s, 40s
+                await asyncio.sleep(wait)
+        return ""  # unreachable
 
     async def get_pad_status(self) -> Optional[int]:
         return await asyncio.to_thread(self._get_pad_status_sync)
@@ -273,3 +287,68 @@ class VmosHelper:
     async def list_installed_apps(self) -> list[str]:
         out = await self.run_shell("pm list packages 2>/dev/null")
         return re.findall(r"package:(\S+)", out or "")
+
+    # ── Root / switchRoot ─────────────────────────────────────────────────────
+
+    async def switch_root(self, global_root: bool = True,
+                          root_status: bool = True) -> bool:
+        """Gọi switchRoot API. Trả True nếu không raise lỗi."""
+        fn = functools.partial(
+            self._client.instance.switch_root,
+            [self.pad],
+            global_root=global_root,
+            root_status=root_status,
+        )
+        await asyncio.to_thread(fn)
+        return True
+
+    async def check_resetprop(self) -> bool:
+        """Kiểm tra /system/bin/resetprop tồn tại. Trả True nếu có."""
+        out = await self.run_shell(
+            "test -f /system/bin/resetprop && echo HAS_RESETPROP || echo NO_RESETPROP"
+        )
+        return "HAS_RESETPROP" in (out or "")
+
+    async def check_apmt(self) -> bool:
+        """Kiểm tra lệnh apmt có sẵn trên device không. Trả True nếu có."""
+        out = await self.run_shell(
+            "which apmt 2>/dev/null && echo HAS_APMT || echo NO_APMT"
+        )
+        return "HAS_APMT" in (out or "")
+
+    # ── Template / image change ───────────────────────────────────────────────
+
+    async def modify_real_adi_template(
+        self, template_id: int, wipe_data: bool = True
+    ) -> bool:
+        """Đổi ADI template real device. Trả True nếu không raise lỗi."""
+        fn = functools.partial(
+            self._client.instance.modify_real_adi_template,
+            [self.pad],
+            real_phone_template_id=template_id,
+            wipe_data=wipe_data,
+        )
+        await asyncio.to_thread(fn)
+        await self.wait_pad_not_ready(timeout=120, poll=3)
+        return await self.wait_pad_ready(timeout=360, poll=5)
+
+    async def upgrade_real_device_image(
+        self,
+        *,
+        image_id: str | None = None,
+        real_phone_template_id: int | None = None,
+        device_android_props: dict | None = None,
+        wipe_data: bool = True,
+    ) -> bool:
+        """virtualRealSwitch — nâng cấp/đổi image real device. Trả True khi ready."""
+        fn = functools.partial(
+            self._client.instance.upgrade_real_device_image,
+            [self.pad],
+            image_id=image_id,
+            real_phone_template_id=real_phone_template_id,
+            device_android_props=device_android_props,
+            wipe_data=wipe_data,
+        )
+        await asyncio.to_thread(fn)
+        await self.wait_pad_not_ready(timeout=120, poll=3)
+        return await self.wait_pad_ready(timeout=360, poll=5)

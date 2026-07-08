@@ -8,6 +8,7 @@ from backend.config import Settings
 from backend.vmos_helper import VmosHelper
 
 GOOGLE_ONE_PKG = "com.google.android.apps.subscriptions.red"
+_PLAY_STORE_PKG = "com.android.vending"
 _PLAY_INTENT = f"am start -a android.intent.action.VIEW -d 'market://details?id={GOOGLE_ONE_PKG}' 2>/dev/null"
 
 
@@ -22,10 +23,27 @@ async def run(helper: VmosHelper, cfg: Settings, log) -> None:
         await helper.clean_app_home()
         return
 
-    # 3.1 Mở trang Play Store
+    # 3.1 Mở trang Play Store (retry nếu mở nhầm app)
     log("Step 3.1: Mở Play Store trang Google One...")
-    await helper.run_shell(_PLAY_INTENT)
-    await asyncio.sleep(4)
+    found = False
+    for _attempt in range(3):
+        await helper.run_shell(_PLAY_INTENT)
+        await asyncio.sleep(6)
+        # Kiểm tra focus có phải Play Store không
+        foc = await helper.run_shell(
+            "dumpsys window 2>/dev/null | grep -o 'mCurrentFocus=[^}]*}' | head -1"
+        )
+        if _PLAY_STORE_PKG in (foc or ""):
+            break
+        # Mở nhầm app (Downloads, Files, ...) — force-stop rồi thử lại
+        log(f"Step 3.1: Mở nhầm app ({(foc or '').strip()}) — retry {_attempt+1}/3...", "WARN")
+        await helper.run_shell(
+            "am force-stop com.android.documentsui 2>/dev/null; "
+            "am force-stop com.google.android.apps.nbu.files 2>/dev/null; "
+            f"am force-stop {_PLAY_STORE_PKG} 2>/dev/null; "
+            "input keyevent KEYCODE_HOME 2>/dev/null"
+        )
+        await asyncio.sleep(4)
 
     # 3.2 Poll và click "Install"
     log("Step 3.2: Chờ nút Install...")

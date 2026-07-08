@@ -15,10 +15,32 @@ _MAGISK_TITLE_TEXT = 'Magisk (Mask)'
 
 
 async def run(helper: VmosHelper, cfg: Settings, log) -> None:
-    """Bật Magisk qua Toolbox, chờ reboot, verify."""
+    """Bật root/Magisk.
+
+    Ưu tiên:
+      1. switchRoot API (không cần UI) → nếu resetprop xuất hiện thì skip Toolbox.
+      2. Fallback: bật Kitsune Magisk qua VMOS Toolbox UI (flow cũ đã xác nhận).
+    """
     timeout = cfg.step_timeout
     magisk_timeout = cfg.magisk_timeout
     interval = cfg.poll_interval
+
+    # ── Thử phương án A: switchRoot API ──────────────────────────────────────
+    log("Step 4: Thử bật root qua switchRoot API trước...")
+    try:
+        from backend.steps.step4b_switch_root import run as try_switch_root
+        got_resetprop = await try_switch_root(helper, cfg, log)
+        if got_resetprop:
+            log("Step 4: switchRoot cung cấp resetprop ✓ — bỏ qua Toolbox UI")
+            return
+        log("Step 4: switchRoot không cung cấp resetprop — fallback sang Toolbox UI")
+    except RuntimeError as exc:
+        log(f"Step 4: switchRoot thất bại ({exc}) — fallback sang Toolbox UI", "WARN")
+    except Exception as exc:
+        log(f"Step 4: switchRoot lỗi không xác định ({exc}) — fallback sang Toolbox UI", "WARN")
+
+    # ── Fallback: bật Kitsune Magisk qua Toolbox UI ───────────────────────────
+    log("Step 4: Bật Magisk qua Toolbox UI...")
 
     # 4.1 Tìm và click Toolbox
     log("Step 4.1: Tìm Toolbox icon...")

@@ -124,9 +124,9 @@ function ViewerPage() {
       ) : (
         <>
           <div
-            className="grid min-h-0 flex-1 gap-3 overflow-hidden"
+            className="grid min-h-0 flex-1 gap-3 overflow-auto"
             style={{
-              gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+              gridTemplateColumns: `repeat(${cols}, minmax(180px, 1fr))`,
               gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
             }}
           >

@@ -224,17 +224,26 @@ async def get_pads():
     if not _settings.access_key or not _settings.secret_key:
         return JSONResponse({"error": "VMOS API chưa cấu hình"}, status_code=400)
 
-    try:
-        from vmos_sdk import VmosClient
-        client = VmosClient(access_key=_settings.access_key,
+    last_err = ""
+    for _attempt in range(4):
+        try:
+            from vmos_sdk import VmosClient
+            _c = VmosClient(access_key=_settings.access_key,
                             secret_key=_settings.secret_key)
-        r = await asyncio.to_thread(client.instance.get_list_info)
-        client.close()
-        page_data = r.data.get("pageData", []) if isinstance(r.data, dict) else []
-        pads = [p["padCode"] for p in page_data if p.get("vmStatus") == 1]
-        return {"pads": pads, "source": "auto", "total": len(pads)}
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+            _r = await asyncio.to_thread(
+                _c.instance.get_list_info, page=1, rows=100
+            )
+            _c.close()
+            page_data = _r.data.get("pageData", []) if isinstance(_r.data, dict) else []
+            pads = [p["padCode"] for p in page_data if p.get("padCode")]
+            return {"pads": pads, "source": "auto", "total": len(pads)}
+        except Exception as e:
+            last_err = str(e)
+            if "busy" in last_err.lower() and _attempt < 3:
+                await asyncio.sleep(5 * (_attempt + 1))
+                continue
+            break
+    return JSONResponse({"error": last_err}, status_code=500)
 
 
 def _extract_token(data) -> Optional[str]:
@@ -375,6 +384,140 @@ async def get_stats():
     counts["QUEUE_SIZE"] = _queue.qsize() if _queue else 0
     counts["WORKERS"] = get_all_worker_states()
     return counts
+
+
+# ── PAD — Direct Spoof / Root / Hook / Template endpoints ────────────────────
+
+def _make_helper(settings: Settings, pad_code: str):
+    """Factory: tạo VmosHelper dùng 1 lần cho các endpoint ad-hoc."""
+    from backend.vmos_helper import VmosHelper
+    return VmosHelper(
+        access_key=settings.access_key,
+        secret_key=settings.secret_key,
+        pad_code=pad_code,
+    )
+
+
+@app.post("/api/pads/{pad_code}/switch-root")
+async def pad_switch_root(pad_code: str):
+    """Probe switchRoot API + kiểm tra resetprop / apmt.
+
+    Trả về:
+        switch_root_ok, has_resetprop, has_apmt, error
+    """
+    if not _settings.access_key or not _settings.secret_key:
+        return JSONResponse({"error": "VMOS API chưa cấu hình"}, status_code=400)
+
+    from backend.steps.step4b_switch_root import probe_only
+
+    logs: list[str] = []
+
+    def _log(msg: str, level: str = "INFO") -> None:
+        logs.append(f"[{level}] {msg}")
+
+    helper = _make_helper(_settings, pad_code)
+    try:
+        result = await probe_only(helper, _log)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc), "logs": logs}, status_code=500)
+    finally:
+        helper.close()
+
+    result["logs"] = logs
+    return result
+
+
+@app.post("/api/pads/{pad_code}/spoof-resetprop")
+async def pad_spoof_resetprop(pad_code: str):
+    """Chạy spoof Pixel 10 Pro bằng resetprop (giả định Magisk/switchRoot đã active).
+
+    Trả về:
+        ok (bool), output (str), error (str|None)
+    """
+    if not _settings.access_key or not _settings.secret_key:
+        return JSONResponse({"error": "VMOS API chưa cấu hình"}, status_code=400)
+
+    from backend.steps.step5_spoof import BATCH1, BATCH2, _EXPECTED_MODEL, _EXPECTED_DEVICE
+
+    helper = _make_helper(_settings, pad_code)
+    logs: list[str] = []
+
+    def _log(msg: str, level: str = "INFO") -> None:
+        logs.append(f"[{level}] {msg}")
+
+    try:
+        _log("Chạy batch1...")
+        out1 = await helper.run_shell(BATCH1)
+        if "BATCH1_OK" not in (out1 or ""):
+            _log(f"Batch1 không có BATCH1_OK: {out1!r}", "WARN")
+
+        _log("Chạy batch2...")
+        out2 = await helper.run_shell(BATCH2)
+
+        ok = _EXPECTED_MODEL in (out2 or "") and _EXPECTED_DEVICE in (out2 or "")
+        _log("Spoof thành công ✓" if ok else f"Verify thất bại: {out2!r}", "INFO" if ok else "WARN")
+        return {"ok": ok, "output": out2, "logs": logs}
+    except Exception as exc:
+        return JSONResponse({"error": str(exc), "logs": logs}, status_code=500)
+    finally:
+        helper.close()
+
+
+@app.get("/api/pads/{pad_code}/hook-status")
+async def pad_hook_status(pad_code: str):
+    """Kiểm tra apmt availability + danh sách patch đang active.
+
+    Trả về:
+        has_apmt (bool), patch_list (list[str]), error (str|None)
+    """
+    if not _settings.access_key or not _settings.secret_key:
+        return JSONResponse({"error": "VMOS API chưa cấu hình"}, status_code=400)
+
+    from backend.steps.step4c_lsposed_check import probe
+
+    logs: list[str] = []
+
+    def _log(msg: str, level: str = "INFO") -> None:
+        logs.append(f"[{level}] {msg}")
+
+    helper = _make_helper(_settings, pad_code)
+    try:
+        result = await probe(helper, _log)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc), "logs": logs}, status_code=500)
+    finally:
+        helper.close()
+
+    result["logs"] = logs
+    return result
+
+
+class ChangeTemplatePayload(BaseModel):
+    template_id: int
+    wipe_data: bool = True
+
+
+@app.post("/api/pads/{pad_code}/change-template")
+async def pad_change_template(pad_code: str, payload: ChangeTemplatePayload):
+    """Đổi ADI template real device (replaceRealAdiTemplate).
+
+    Trả về:
+        ok (bool), error (str|None)
+    """
+    if not _settings.access_key or not _settings.secret_key:
+        return JSONResponse({"error": "VMOS API chưa cấu hình"}, status_code=400)
+
+    helper = _make_helper(_settings, pad_code)
+    try:
+        ready = await helper.modify_real_adi_template(
+            template_id=payload.template_id,
+            wipe_data=payload.wipe_data,
+        )
+        return {"ok": ready, "pad_code": pad_code, "template_id": payload.template_id}
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    finally:
+        helper.close()
 
 
 # ── SPA Fallback — mount last so API routes take priority ────────────────────

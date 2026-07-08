@@ -59,8 +59,9 @@ export const Route = createFileRoute("/")({
 function Dashboard() {
   const workers = useAppStore((s) => s.workers);
   const logs = useAppStore((s) => s.logs);
+  const selectedPads = useAppStore((s) => s.selectedPads);
+  const setSelectedPads = useAppStore((s) => s.setSelectedPads);
   const queryClient = useQueryClient();
-  const [selectedPads, setSelectedPads] = useState<string[]>([]);
   const [quickText, setQuickText] = useState("");
   const t = useT();
   const logsBottom = useRef<HTMLDivElement | null>(null);
