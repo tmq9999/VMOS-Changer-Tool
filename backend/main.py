@@ -213,6 +213,33 @@ async def load_from_sheets():
     }
 
 
+@app.post("/api/sheets/test")
+async def test_sheets_connection():
+    """Test kết nối Google Sheet, trả về số dòng và tiêu đề spreadsheet."""
+    if not _settings.spreadsheet_id or not _settings.service_account_json:
+        return {"ok": False, "error": "Google Sheet chưa cấu hình"}
+
+    def _probe() -> dict:
+        from backend.sheets import SheetsClient
+        client = SheetsClient(
+            service_account_json=_settings.service_account_json,
+            spreadsheet_id=_settings.spreadsheet_id,
+            sheet_name=_settings.sheet_name,
+            data_start_row=_settings.data_start_row,
+        )
+        rows = client.read_emails(skip_successful=False)
+        return {
+            "ok": True,
+            "rows": len(rows),
+            "title": getattr(client._ss, "title", ""),
+        }
+
+    try:
+        return await asyncio.to_thread(_probe)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # ── PAD Management ────────────────────────────────────────────────────────────
 
 @app.get("/api/pads")
@@ -381,9 +408,15 @@ async def get_stats():
         s = j.get("status", "")
         if s in counts:
             counts[s] += 1
-    counts["QUEUE_SIZE"] = _queue.qsize() if _queue else 0
-    counts["WORKERS"] = get_all_worker_states()
-    return counts
+    return {
+        "total": len(jobs),
+        "success": counts["SUCCESS"],
+        "failed": counts["ERROR"] + counts["WARN"],
+        "running": counts["RUNNING"],
+        "pending": counts["QUEUED"],
+        "queue_size": _queue.qsize() if _queue else 0,
+        "workers": len(get_all_worker_states()),
+    }
 
 
 # ── PAD — Direct Spoof / Root / Hook / Template endpoints ────────────────────

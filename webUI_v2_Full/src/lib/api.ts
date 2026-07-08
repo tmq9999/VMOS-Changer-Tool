@@ -148,6 +148,18 @@ export async function getPads() {
   return j<PadsResult>(await fetch(apiUrl("/api/pads")));
 }
 
+export interface H5TokenResult {
+  token: string;
+  baseUrl: string;
+  padCode: string;
+}
+
+export async function getH5Token(padCode: string) {
+  return j<H5TokenResult>(
+    await fetch(apiUrl(`/api/pads/${encodeURIComponent(padCode)}/h5-token`)),
+  );
+}
+
 export async function startRun(padCodes?: string[]) {
   return j<{ ok?: boolean; error?: string }>(
     await fetch(apiUrl("/api/run/start"), {

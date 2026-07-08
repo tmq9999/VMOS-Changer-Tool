@@ -15,6 +15,10 @@ node_modules/
 frontend/node_modules/
 frontend/dist/
 frontend/build/
+webUI_v2_Full/node_modules/
+webUI_v2_Full/.output/
+webUI_v2_Full/.wrangler/
+webUI_v2_Full/src/routeTree.gen.ts
 *.log
 npm-debug.log*
 

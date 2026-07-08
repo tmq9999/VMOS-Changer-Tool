@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 
@@ -15,8 +15,8 @@ import {
 } from "@/components/ui/select";
 import { useT } from "@/lib/i18n";
 import { getPads } from "@/lib/api";
-import { apiUrl } from "@/lib/api-config";
 import { useAppStore } from "@/lib/store";
+import { PadRtcView } from "@/components/pad-rtc-view";
 
 export const Route = createFileRoute("/viewer")({
   head: () => ({
@@ -44,12 +44,6 @@ function ViewerPage() {
 
   const [cols, setCols] = useState(4);
   const [rows, setRows] = useState(2);
-  const [tick, setTick] = useState(0);
-
-  useEffect(() => {
-    const id = setInterval(() => setTick((n) => n + 1), 2000);
-    return () => clearInterval(id);
-  }, []);
 
   const devices = useMemo(() => {
     const workerPads = Object.keys(workers);
@@ -136,7 +130,6 @@ function ViewerPage() {
               pad={pad}
               online={wsStatus === "connected"}
               email={workers[pad]?.email}
-              tick={tick}
               lastLog={
                 [...logs].reverse().find((l) => l.pad === pad)?.message ??
                 undefined
@@ -155,22 +148,14 @@ function DeviceCell({
   pad,
   online,
   email,
-  tick,
   lastLog,
 }: {
   pad: string;
   online: boolean;
   email?: string;
-  tick: number;
   lastLog?: string;
 }) {
   const t = useT();
-  const [errored, setErrored] = useState(false);
-  const src = apiUrl(`/api/viewer/frame?pad=${encodeURIComponent(pad)}&t=${tick}`);
-
-  useEffect(() => {
-    setErrored(false);
-  }, [pad]);
 
   return (
     <Card className="flex h-full flex-col overflow-hidden shadow-sm">
@@ -190,19 +175,7 @@ function DeviceCell({
         </Badge>
       </div>
       <div className="relative w-full bg-black" style={{ aspectRatio: "9 / 16" }}>
-        {errored ? (
-          <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
-            {t("viewer.noFrame")}
-          </div>
-        ) : (
-          <img
-            src={src}
-            alt={pad}
-            className="absolute inset-0 h-full w-full object-contain"
-            onError={() => setErrored(true)}
-            draggable={false}
-          />
-        )}
+        <PadRtcView padCode={pad} />
       </div>
       <div className="min-h-[44px] border-t bg-muted/30 px-3 py-2 text-xs">
         {email ? (

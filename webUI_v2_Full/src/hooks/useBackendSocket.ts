@@ -1,6 +1,33 @@
 import { useEffect, useRef } from "react";
 import { wsUrl } from "@/lib/api-config";
 import { useAppStore } from "@/lib/store";
+import { notifyTelegram } from "@/lib/telegram";
+
+interface BatchDoneData {
+  batch_num: number;
+  total: number;
+  success: number;
+  failed: number;
+  success_rows: string[];
+  failed_rows: string[];
+  fail_reasons: string[];
+  duration_min: number;
+  time: string;
+}
+
+function formatBatchMessage(d: BatchDoneData): string {
+  const lines = [
+    `📊 <b>Batch #${d.batch_num}</b>: ${d.total} mail — ${d.duration_min} phút`,
+    `✅ Thành công: ${d.success}${d.success_rows.length ? ` (Dòng ${d.success_rows.join(",")})` : ""}`,
+  ];
+  if (d.failed > 0) {
+    lines.push(`❌ Thất bại: ${d.failed} (Dòng ${d.failed_rows.join(",")})`);
+    const reasons = Array.from(new Set(d.fail_reasons)).filter(Boolean);
+    if (reasons.length) lines.push(`Lý do: ${reasons.join("; ")}`);
+  }
+  lines.push(`🕐 Time: ${d.time}`);
+  return lines.join("\n");
+}
 
 export function useBackendSocket() {
   const setWsStatus = useAppStore((s) => s.setWsStatus);
@@ -60,6 +87,15 @@ export function useBackendSocket() {
             });
           } else if (msg.type === "job_update" && msg.pad) {
             upsertWorker(msg.pad, (msg.data as Record<string, unknown>) ?? {});
+          } else if (msg.type === "batch_done" && msg.data) {
+            const d = msg.data as BatchDoneData;
+            const text = formatBatchMessage(d);
+            appendLog({
+              ts: new Date().toISOString(),
+              level: d.failed > 0 ? "WARN" : "SUCCESS",
+              message: `Batch #${d.batch_num} xong: ${d.success}/${d.total} thành công (${d.duration_min} phút)`,
+            });
+            notifyTelegram(text).catch(() => {});
           }
         } catch {
           /* ignore */

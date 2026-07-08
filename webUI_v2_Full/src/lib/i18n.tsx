@@ -198,6 +198,12 @@ const vi: Dict = {
   "viewer.noFrame": "Không có hình ảnh",
   "viewer.noLog": "Chưa có log",
   "viewer.hint": "Mỗi ô là một thiết bị. Điều chỉnh số dòng/cột trong Cài đặt.",
+  "viewer.connecting": "Đang kết nối…",
+  "viewer.error": "Lỗi",
+  "viewer.retrying": "Tự động thử lại…",
+  "viewer.disconnected": "Mất kết nối",
+  "viewer.unsupported": "Trình duyệt không hỗ trợ",
+  "viewer.reconnect": "Kết nối lại",
 };
 
 const en: Dict = {
@@ -388,6 +394,12 @@ const en: Dict = {
   "viewer.noFrame": "No frame",
   "viewer.noLog": "No log yet",
   "viewer.hint": "Each cell is one device. Adjust rows/cols in the controls.",
+  "viewer.connecting": "Connecting…",
+  "viewer.error": "Error",
+  "viewer.retrying": "Auto retrying…",
+  "viewer.disconnected": "Disconnected",
+  "viewer.unsupported": "Browser not supported",
+  "viewer.reconnect": "Reconnect",
 };
 
 const dicts: Record<Lang, Dict> = { vi, en };

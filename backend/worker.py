@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import traceback
+from datetime import datetime
 from typing import Callable, Optional
 
 from backend import db
@@ -24,6 +26,9 @@ BroadcastFn = Callable[[str, str, dict], None]
 # Trạng thái worker toàn cục: pad_code → trạng thái hiện tại
 _worker_states: dict[str, dict] = {}
 
+# Đếm số batch đã chạy trong phiên hiện tại
+_batch_counter: int = 0
+
 
 def get_all_worker_states() -> dict[str, dict]:
     return dict(_worker_states)
@@ -31,9 +36,10 @@ def get_all_worker_states() -> dict[str, dict]:
 
 def _set_state(pad: str, status: str, email: str = "", step: str = "",
                broadcast: Optional[BroadcastFn] = None) -> None:
-    _worker_states[pad] = {"pad": pad, "status": status, "email": email, "step": step}
+    _worker_states[pad] = {"pad": pad, "pad_code": pad, "status": status,
+                           "email": email, "step": step}
     if broadcast:
-        broadcast(pad, "worker_state", _worker_states[pad])
+        broadcast(pad, "worker_update", _worker_states[pad])
 
 
 async def run_worker(
@@ -147,10 +153,11 @@ async def run_worker(
                     log(f"Sheets write error: {e}", "WARN")
 
             if broadcast:
-                broadcast(pad_code, "job_done", {
+                broadcast(pad_code, "job_update", {
                     "job_id": current_job_id,
                     "email": entry.email,
                     "severity": severity,
+                    "status": severity,
                     "offer1": offer1,
                     "offer2": offer2,
                     "result": result_msg,
@@ -172,6 +179,16 @@ async def run_all_workers(
     broadcast: Optional[BroadcastFn] = None,
 ) -> None:
     """Khởi động tất cả worker tasks song song."""
+    global _batch_counter
+    _batch_counter += 1
+    batch_num = _batch_counter
+    started_at = time.time()
+
+    # Chụp danh sách job thuộc batch này (đang QUEUED trước khi chạy)
+    batch_job_ids = {
+        j["id"] for j in db.get_all_jobs() if j.get("status") == "QUEUED"
+    }
+
     tasks = []
     for i, pad in enumerate(pad_codes):
         delay = i * settings.worker_start_delay
@@ -183,6 +200,42 @@ async def run_all_workers(
 
     await asyncio.gather(*tasks, return_exceptions=True)
 
+    if broadcast:
+        _broadcast_batch_done(batch_num, batch_job_ids, started_at, broadcast)
+
+
+def _broadcast_batch_done(batch_num: int, job_ids: set[int],
+                          started_at: float, broadcast: BroadcastFn) -> None:
+    """Tổng hợp kết quả batch và broadcast event batch_done cho frontend."""
+    jobs = [j for j in db.get_all_jobs() if j.get("id") in job_ids]
+
+    def _row_label(j: dict) -> str:
+        return str(j.get("sheet_row") if j.get("sheet_row") else j.get("email", ""))
+
+    success_rows: list[str] = []
+    failed_rows: list[str] = []
+    fail_reasons: list[str] = []
+    for j in jobs:
+        if j.get("status") == "SUCCESS":
+            success_rows.append(_row_label(j))
+        else:
+            failed_rows.append(_row_label(j))
+            reason = j.get("result_msg") or j.get("status") or "Unknown"
+            fail_reasons.append(str(reason))
+
+    duration_min = round((time.time() - started_at) / 60.0, 1)
+    broadcast("", "batch_done", {
+        "batch_num": batch_num,
+        "total": len(jobs),
+        "success": len(success_rows),
+        "failed": len(failed_rows),
+        "success_rows": success_rows,
+        "failed_rows": failed_rows,
+        "fail_reasons": fail_reasons,
+        "duration_min": duration_min,
+        "time": datetime.now().strftime("%H:%M:%S"),
+    })
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -192,4 +245,4 @@ def _set_step(pad: str, step: str, job_id: Optional[int],
         _worker_states[pad]["step"] = step
     db.update_job(job_id, step=step)
     if broadcast:
-        broadcast(pad, "worker_state", _worker_states.get(pad, {}))
+        broadcast(pad, "worker_update", _worker_states.get(pad, {}))
